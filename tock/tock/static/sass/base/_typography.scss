@@ -12,19 +12,15 @@ h2 {
 }
 
 a {
-  color: $theme-color-primary;
+  color: $color-medium;
 
   &:hover {
-    color: $theme-color-primary-darker;
+    color: $color-medium-hover;
   }
 }
 
 hr {
-  background: $theme-color-base-lighter;
+  background: $color-gray-lighter;
   border: 0;
   height: 1px;
-}
-
-.intro-text {
-  @include u-font-size('body', 'md');
 }

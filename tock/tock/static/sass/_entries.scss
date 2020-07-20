@@ -1,12 +1,12 @@
 .entries {
 	.entry:last-child {
-		border-bottom: 2px solid $theme-color-base-light;
+		border-bottom: 2px solid $color-gray-light;
 	}
 	select {
 		width:100%;
-		color: $theme-color-base-dark;
+		color: #555;
 		background-color: #fff;
-		border: 1px solid $theme-color-base-dark;
+		border: 1px solid #5b616b;
 		transition: border-color ease-in-out .15s,box-shadow ease-in-out .15s;
 		margin-bottom:0;
 	}
@@ -29,7 +29,7 @@
     margin-bottom: 10px;
 
     .warning {
-        color: $theme-color-secondary;
+        color: crimson;
 
         &.bold {
             font-weight: bold;
@@ -69,8 +69,8 @@
 
 
 .entry {
-	border-top: 2px solid $theme-color-base-lighter;
-	background-color: $theme-color-base-lightest;
+	border-top: 2px solid $color-gray-lighter;
+	background-color: $color-gray-lightest;
 	padding: 1em;
 
 .grid-container {
@@ -86,13 +86,13 @@
 
     &.odd {
 			.grid-container {
-			background-color: $theme-color-base-lightest;
+			background-color: $color-gray-lightest;
 }
 
 
         .entry-alerts {
             .warning {
-                color: $theme-color-secondary-dark;
+                color: #500;
             }
 
             .important {
@@ -110,7 +110,13 @@
 	@include span-columns(6);
 }*/
 
+.entry-billable {
+
+}
+
 .entry-notes {
+
+
     textarea {
         height: 100px;
     }
@@ -129,6 +135,10 @@
 	&.non-billable {
 		color: #1188ff;
 	}
+}
+
+.entry-amount {
+
 }
 
 .entry-project label, .entry-amount label, .entry-note-field label {
@@ -187,7 +197,7 @@
 
     .background {
       fill: none;
-      stroke: $theme-color-accent-cool-lighter;
+      stroke: $color-primary-alt-lightest;
       stroke-width: 3;
       transition: stroke-dasharray 0.3s ease-out;
     }
@@ -201,20 +211,20 @@
   }
 
   &.invalid {
-    color: $theme-color-secondary-dark;
+    color: $color-secondary-dark;
   }
 
   &.valid {
-    color: $theme-color-success;
+    color: $color-green;
   }
 
   display: block;
   position: relative;
-  color: $theme-color-accent-cool-lighter;
+  color: $color-primary-alt-lightest;
 }
 
 .entries-total {
-	background: $theme-color-accent-cool-light;
+	background: $color-primary-alt-light;
 	padding: 1em;
 	.add-timecard-entry,
 	.add-timecard-entry:first-child  {
