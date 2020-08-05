@@ -9,6 +9,8 @@ from tock.utils import PermissionMixin
 from .org import org_billing_context
 from .unit import unit_billing_context
 from .analytics import (
+    nonbillable_data,
+    nonbillable_plot,
     utilization_data,
     utilization_plot,
 )
@@ -75,6 +77,29 @@ class UtilizationAnalyticsView(PermissionMixin, TemplateView):
             {
                 "utilization_data": utilization_data_frame.set_index("start_date"),
                 "utilization_plot": utilization_plot(utilization_data_frame),
+            }
+        )
+
+        # project lifecycle plot
+        nonbillable_data_frame = nonbillable_data(start_date, end_date)
+
+        nonbillable_display_frame = nonbillable_data_frame.drop(
+            "category", axis=1
+        ).pivot(
+            index="start_date",
+            columns="code_name",
+            values="hours"
+        )
+        # put display columns in order by amount of missing data
+        sorted_names = sorted(
+            nonbillable_display_frame.columns,
+            key=lambda name: nonbillable_display_frame[name].isnull().sum()
+        )
+
+        context.update(
+            {
+                "nonbillable_data": nonbillable_display_frame[sorted_names],
+                "nonbillable_plot": nonbillable_plot(nonbillable_data_frame),
             }
         )
 

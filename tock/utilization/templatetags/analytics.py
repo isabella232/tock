@@ -26,7 +26,8 @@ def frame_table(frame, name_hint):
             classes="usa-table",
             table_id=generated_id,
             na_rep=''
-        ) + """
+        ) + f"""
+          <button class="usa-button usa-button--base float-right" onclick="download_table_as_csv('{generated_id}', '{name_hint}')">Export CSV</button>
           </div>
         </div>
         """
