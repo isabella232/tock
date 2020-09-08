@@ -13,7 +13,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core.exceptions import (ObjectDoesNotExist, PermissionDenied,
                                     ValidationError)
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -26,7 +26,6 @@ from rest_framework.decorators import api_view
 from rest_framework.permissions import IsAuthenticated
 from tock.remote_user_auth import email_to_username
 from tock.utils import IsSuperUserOrSelf, PermissionMixin
-from utilization.utils import calculate_utilization
 
 from .forms import (ReportingPeriodForm, ReportingPeriodImportForm,
                     TimecardForm, TimecardFormSet, projects_as_choices,
@@ -355,7 +354,7 @@ class ReportingPeriodListView(PermissionMixin, ListView):
         context['completed_reporting_periods'] = self.queryset.filter(
             timecard__submitted=True,
             timecard__user=self.request.user.id
-        ).distinct()[:5]
+        ).distinct()[:3]
 
         try:
             unstarted_reporting_periods = self.queryset.exclude(
@@ -374,7 +373,10 @@ class ReportingPeriodListView(PermissionMixin, ListView):
 
         context['uncompleted_reporting_periods'] = sorted(list(chain(
             unstarted_reporting_periods, unfinished_reporting_periods)),
-            key=attrgetter('start_date'))
+            key=attrgetter('start_date'), reverse=True)
+
+        context['today'] = dt.datetime.utcnow().date()
+
         return context
 
 
@@ -480,7 +482,8 @@ class TimecardView(PermissionMixin, UpdateView):
         # TODO: This is inefficient because we're writing over the
         # already-generated choices. Ideally we should be passing these
         # into the formset constructor.
-        choices = projects_as_choices(reporting_period.get_projects())
+        projects = reporting_period.get_projects().filter(Q(organization=self.request.user.user_data.organization) | Q(organization=None))
+        choices = projects_as_choices(projects)
 
         for form in formset.forms:
             form.fields['project'].choices = choices
@@ -494,7 +497,7 @@ class TimecardView(PermissionMixin, UpdateView):
             'max_working_hours': base_reporting_period.max_working_hours,
             'formset': formset,
             'messages': messages.get_messages(self.request),
-            'timecard_notes': TimecardNote.objects.enabled(),
+            'timecard_notes': TimecardNote.objects.active(),
             'unsubmitted': not self.object.submitted,
             'reporting_period': reporting_period,
             'excluded_from_billability': json.dumps(list(Project.objects.excluded_from_billability().values_list('id', flat=True))),
@@ -637,7 +640,8 @@ class ReportsList(PermissionMixin, ListView):
     permission_classes = (IsAuthenticated, )
 
     def get_queryset(self, queryset=None):
-        query = ReportingPeriod.objects.filter(start_date__gte=ReportingPeriod.get_fiscal_year_start_date(settings.STARTING_FY_FOR_REPORTS_PAGE))
+        query = ReportingPeriod.objects.filter(
+            start_date__gte=ReportingPeriod.get_fiscal_year_start_date(settings.STARTING_FY_FOR_REPORTS_PAGE))
         fiscal_years = {}
         for reporting_period in query:
             if str(reporting_period.get_fiscal_year()) in fiscal_years:
@@ -651,7 +655,6 @@ class ReportsList(PermissionMixin, ListView):
         sorted_fiscal_years = sorted(fiscal_years.items(), reverse=True)
         return sorted_fiscal_years
 
-
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         year = ReportingPeriod.get_fiscal_year_from_date(localdate())
@@ -662,7 +665,8 @@ class ReportsList(PermissionMixin, ListView):
                 'end_date': ReportingPeriod.get_fiscal_year_end_date(fy)
             } for fy in range(settings.STARTING_FY_FOR_REPORTS_PAGE, year + 1)
         ]
-        context['starting_report_date'] = ReportingPeriod.get_fiscal_year_start_date(settings.STARTING_FY_FOR_REPORTS_PAGE)
+        context['starting_report_date'] = ReportingPeriod.get_fiscal_year_start_date(
+            settings.STARTING_FY_FOR_REPORTS_PAGE)
 
         return context
 
@@ -705,15 +709,16 @@ class ReportingPeriodDetailView(PermissionMixin, ListView):
         We need to add the reporting period to context,
         as well as users who have not filed timecards,
         so long as they are not new hires or recently departed.
+        We also need to know which organizations have absentee filers.
 
         To do so, we'll first get a quick list of IDs
         of those who have filed.
         """
         context = super().get_context_data(**kwargs)
         filed_users = Timecard.objects.filter(
-                reporting_period=self.report_period,
-                submitted=True
-            ).select_related('user', 'reporting_period', "user__user_data") \
+            reporting_period=self.report_period,
+            submitted=True
+        ).select_related('user', 'reporting_period', "user__user_data") \
             .distinct().values_list('user__id', flat=True)
 
         unfiled_users = get_user_model().objects \
@@ -724,9 +729,13 @@ class ReportingPeriodDetailView(PermissionMixin, ListView):
             .select_related('user_data', 'user_data__organization') \
             .order_by('user_data__organization__name', 'last_name', 'first_name')
 
+        orgs_represented = set(unfiled_users
+                               .distinct().values_list('user_data__organization__name', flat=True))
+
         context.update({
             'users_without_filed_timecards': unfiled_users,
-            'reporting_period': self.report_period
+            'reporting_period': self.report_period,
+            'orgs_without_filed_timecards': orgs_represented
         })
         return context
 
@@ -783,31 +792,18 @@ class ReportingPeriodUserDetailView(PermissionMixin, DetailView):
     def get_context_data(self, **kwargs):
         rp_period = self.kwargs['reporting_period']
         username = self.kwargs['username']
-        user_billable_hours = TimecardObject.objects.filter(
-            timecard__reporting_period__start_date=rp_period,
-            timecard__user__username=username,
-            project__accounting_code__billable=True
-        ).aggregate(
-            (
-                Sum('hours_spent')
-            )
-        )['hours_spent__sum']
 
-        user_all_hours = TimecardObject.objects.filter(
-            timecard__reporting_period__start_date=rp_period,
-            timecard__user__username=username,
-        ).aggregate(
-            (
-                Sum('hours_spent')
-            )
-        )['hours_spent__sum']
+        timecard = Timecard.objects.get(
+            reporting_period__start_date=rp_period,
+            user__username=username
+        )
 
         context = super(
             ReportingPeriodUserDetailView, self).get_context_data(**kwargs)
-        context['user_billable_hours'] = user_billable_hours
-        context['user_all_hours'] = user_all_hours
-        context['user_utilization'] = calculate_utilization(
-            context['user_billable_hours'],
-            context['user_all_hours']
-        )
+        context['user_billable_hours'] = timecard.billable_hours
+        context['user_non_billable_hours'] = timecard.non_billable_hours
+        context['user_excluded_hours'] = timecard.excluded_hours
+        context['user_target_hours'] = timecard.target_hours
+        context['user_utilization'] = timecard.utilization
+
         return context

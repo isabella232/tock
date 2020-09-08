@@ -4,6 +4,7 @@ from django.db.utils import IntegrityError
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 import datetime
 
@@ -16,6 +17,7 @@ from hours.models import (
 )
 from projects.models import Project, ProfitLossAccount
 from employees.models import EmployeeGrade, UserData
+from organizations.models import Organization, Unit
 
 
 class HolidayPrefillsTests(TestCase):
@@ -111,7 +113,9 @@ class ReportingPeriodTests(TestCase):
 class TimecardTests(TestCase):
     fixtures = [
         'projects/fixtures/projects.json',
-        'tock/fixtures/prod_user.json'
+        'tock/fixtures/prod_user.json',
+        'organizations/fixtures/organizations.json',
+        'organizations/fixtures/units.json'
     ]
 
     def setUp(self):
@@ -136,6 +140,14 @@ class TimecardTests(TestCase):
             timecard=self.timecard,
             project=self.project_2,
             hours_spent=28)
+
+        self.user_18f_current = get_user_model().objects.create()
+        self.user_18f_current_data = UserData.objects.create(user=self.user_18f_current)
+        self.user_18f_current_data.organization = Organization.objects.get(pk=1)
+        self.user_18f_current_data.unit = Unit.objects.get(pk=1)
+        self.user_18f_current_data.current_employee = True
+        self.user_18f_current_data.is_18f_employee = True
+        self.user_18f_current.save()
 
     def test_time_card_saved(self):
         """Test that the time card was saved correctly."""
@@ -184,12 +196,49 @@ class TimecardTests(TestCase):
 
         self.assertEqual(self.timecard.target_hours, self.timecard.max_target_hours())
 
+    def test_timecard_saves_user_organization(self):
+        timecard = Timecard.objects.create(
+            user=self.user_18f_current,
+            reporting_period=self.reporting_period
+        )
+        timecard.save()
+
+        self.assertEqual(timecard.organization, self.user_18f_current.user_data.organization)
+
+        # change employee org and verify that the timecard keeps the original one when resaved
+        old_org = self.user_18f_current_data.organization
+        self.user_18f_current_data.organization = None
+
+        timecard.save()
+
+        self.assertEqual(timecard.organization, old_org)
+
+    def test_timecard_saves_user_unit(self):
+        timecard = Timecard.objects.create(
+            user=self.user_18f_current,
+            reporting_period=self.reporting_period
+        )
+        timecard.save()
+
+        self.assertEqual(timecard.unit, self.user_18f_current.user_data.unit)
+
+        # change employee unit and verify that the timecard keeps the original one when resaved
+        old_unit = self.user_18f_current_data.unit
+        self.user_18f_current_data.unit = None
+
+        timecard.save()
+
+        self.assertEqual(timecard.unit, old_unit)
+
 
 class TimecardNoteTests(TestCase):
     def setUp(self):
-        # Ensure that we are dealing with just the two timecard note objects
+
+        # Ensure that we are dealing with just the timecard note objects
         # that we plan on testing.
         TimecardNote.objects.all().delete()
+
+        self.now = timezone.now()
 
         self.timecard_note_enabled = TimecardNote(
             title='Enabled test note',
@@ -204,6 +253,35 @@ class TimecardNoteTests(TestCase):
         )
         self.timecard_note_disabled.save()
 
+        self.timecard_note_disabled_active_date_range = TimecardNote(
+            title='Disabled active date range note',
+            body='This is a test note that is disabled but has an active date range',
+            enabled=False,
+            display_period_start=self.now - datetime.timedelta(days=5),
+            display_period_end=self.now + datetime.timedelta(days=5)
+        )
+        self.timecard_note_disabled_active_date_range.save()
+
+        self.timecard_note_disabled_elapsed_date_range = TimecardNote(
+            title='Disabled elapsed date range note',
+            body='This is a test note that is disabled and has an elapsed date range',
+            enabled=False,
+            display_period_start=self.now - datetime.timedelta(days=5),
+            display_period_end=self.now - datetime.timedelta(days=1)
+        )
+        self.timecard_note_disabled_elapsed_date_range.save()
+
+        self.timecard_note_disabled_upcoming_date_range = TimecardNote(
+            title='Disabled upcoming date range note',
+            body='This is a test note that is disabled an has an upcoming date range',
+            enabled=False,
+            display_period_start=self.now + datetime.timedelta(days=5),
+            display_period_end=self.now + datetime.timedelta(days=10)
+        )
+        self.timecard_note_disabled_upcoming_date_range.save()
+
+
+
     def test_get_only_enabled_timecard_notes(self):
         """Ensure that we are only returning enabled timecard notes."""
         enabled_timecard_notes = TimecardNote.objects.enabled()
@@ -216,11 +294,67 @@ class TimecardNoteTests(TestCase):
     def test_get_only_disabled_timecard_notes(self):
         """Ensure that we are only returning disabled timecard notes."""
         disabled_timecard_notes = TimecardNote.objects.disabled()
-        self.assertEqual(disabled_timecard_notes.count(), 1)
+        self.assertEqual(disabled_timecard_notes.count(), 4)
         self.assertEqual(
-            disabled_timecard_notes.first(),
+            disabled_timecard_notes[0],
             self.timecard_note_disabled
         )
+        self.assertEqual(
+            disabled_timecard_notes[1],
+            self.timecard_note_disabled_active_date_range
+        )
+        self.assertEqual(
+            disabled_timecard_notes[2],
+            self.timecard_note_disabled_elapsed_date_range
+        )
+        self.assertEqual(
+            disabled_timecard_notes[3],
+            self.timecard_note_disabled_upcoming_date_range
+        )
+
+    def test_get_only_active_timecard_notes(self):
+        """Ensure that we are only returning active timecard notes."""
+        active_timecard_notes = TimecardNote.objects.active()
+        self.assertEqual(active_timecard_notes.count(), 2)
+        self.assertEqual(
+            active_timecard_notes[0],
+            self.timecard_note_enabled
+        )
+        self.assertEqual(
+            active_timecard_notes[1],
+            self.timecard_note_disabled_active_date_range
+        )
+
+    def test_start_date_needs_end_date(self):
+        """Tests that during cleaning, we ensure that start dates are paired with end dates"""
+        with self.assertRaises(ValidationError):
+            TimecardNote(
+                title='Only has a start date',
+                body='Test note with a start date and no end date',
+                enabled=False,
+                display_period_start=self.now
+            ).full_clean()
+
+    def test_end_date_needs_start_date(self):
+        """Tests that during cleaning, we ensure end dates are paired with start dates"""
+        with self.assertRaises(ValidationError):
+            TimecardNote(
+                title='Only has an end date',
+                body='Test note with an end date and no start date',
+                enabled=False,
+                display_period_end=self.now
+            ).full_clean()
+
+    def test_start_date_must_precede_end_date(self):
+        """Tests that during cleaning, we only allow start dates that precend end dates"""
+        with self.assertRaises(ValidationError):
+            TimecardNote(
+                title='End date precedes start date',
+                body='Test note with an end date preceding its start date',
+                enabled=False,
+                display_period_start=self.now + datetime.timedelta(days=1),
+                display_period_end=self.now
+            ).full_clean()
 
     def test_timecard_note_default_order(self):
         """Tests the default ordering of the timecard notes."""

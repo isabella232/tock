@@ -3,12 +3,15 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator
 from django.db import models
 from django.db.models import Q, Sum
 from django.db.models.functions import Coalesce
+from django.utils import timezone
 from employees.models import EmployeeGrade, UserData
 from projects.models import ProfitLossAccount, Project
+from organizations.models import Organization, Unit
 
 from .utils import ValidateOnSaveMixin, render_markdown
 
@@ -232,8 +235,11 @@ class Timecard(models.Model):
     created = models.DateTimeField(auto_now_add=True)
     modified = models.DateTimeField(auto_now=True)
     billable_expectation = models.DecimalField(validators=[MaxValueValidator(limit_value=1)],
-                                            default=Decimal(0.80), decimal_places=2, max_digits=3,
-                                            verbose_name="Percentage of hours which are expected to be billable this week")
+                                            default=Decimal(settings.DEFAULT_BILLABLE_EXPECTATION), decimal_places=2, max_digits=3,
+                                            verbose_name="Percent hours billable per week")
+
+    organization = models.ForeignKey(Organization, null=True, blank=True, on_delete=models.CASCADE)
+    unit = models.ForeignKey(Unit, null=True, blank=True, on_delete=models.CASCADE)
 
     # Utilization reporting
     target_hours = models.DecimalField(decimal_places=2, max_digits=5, null=True, blank=True, editable=False,
@@ -261,6 +267,8 @@ class Timecard(models.Model):
         """
         if not self.id and self.user:
             self.billable_expectation = self.user.user_data.billable_expectation
+            self.organization = self.user.user_data.organization
+            self.unit = self.user.user_data.unit
         if self.id:
             self.calculate_hours()
         super().save(*args, **kwargs)
@@ -314,6 +322,10 @@ class TimecardNoteManager(models.Manager):
     def enabled(self):
         return super(TimecardNoteManager, self).get_queryset().filter(enabled=True)
 
+    def active(self):
+        now = timezone.now()
+        return super(TimecardNoteManager, self).get_queryset().filter(Q(enabled=True) | Q(display_period_start__lte=now, display_period_end__gt=now))
+
     def disabled(self):
         return super(TimecardNoteManager, self).get_queryset().filter(enabled=False)
 
@@ -347,7 +359,17 @@ class TimecardNote(models.Model):
     )
     enabled = models.BooleanField(
         default=True,
-        help_text='Toggle whether or not the note is displayed in a timecard.'
+        help_text='Toggle whether or not the note is displayed in a timecard. Note that when this is checked any start and end date defined below will be ignored.'
+    )
+    display_period_start = models.DateField(
+        null=True,
+        blank=True,
+        help_text='The start date for displaying this note. Note: manually enabling will override this setting.'
+    )
+    display_period_end = models.DateField(
+        null=True,
+        blank=True,
+        help_text='The end date for displaying this note. Note: manually enabling will override this setting.'
     )
     style = models.CharField(
         choices=USWDS_ALERT_CHOICES,
@@ -375,6 +397,14 @@ class TimecardNote(models.Model):
         verbose_name = 'Timecard Note'
         verbose_name_plural = 'Timecard Notes'
 
+    def clean(self):
+        if self.display_period_start is None:
+            if self.display_period_end is not None:
+                raise ValidationError('If you supply an end date, you must supply a start date!')
+        elif self.display_period_end is None:
+            raise ValidationError('If you supply a start date, you must supply an end date!')
+        elif self.display_period_start >= self.display_period_end:
+            raise ValidationError('Display period start must precede display period end!')
 
     def get_enabled_display(self):
         if not self.enabled:

@@ -1,8 +1,8 @@
-from django.contrib import admin
 from django import forms
-
-from .models import UserData, EmployeeGrade
+from django.contrib import admin
 from hours.admin import TimecardPrefillDataInline
+
+from .models import EmployeeGrade, UserData
 
 
 class UserDataForm(forms.ModelForm):
@@ -49,17 +49,17 @@ class UserDataAdmin(admin.ModelAdmin):
         'start_date',
         'end_date',
         'get_organization_name',
+        'expected_billable_hours',
         'unit_info',
         'current_employee',
-        'is_18f_employee',
         'is_billable',
         'is_aws_eligible',
     )
     list_filter = (
         'current_employee',
-        'is_18f_employee',
         'is_aws_eligible',
-        'organization__name',
+        'organization',
+        'unit',
     )
     search_fields = ('user__username',)
 
@@ -78,6 +78,7 @@ class UserDataAdmin(admin.ModelAdmin):
 
         return '-'
     get_organization_name.short_description = 'Organization Name'
+    get_organization_name.admin_order_field = 'organization'
 
 
 class EmployeeGradeAdmin(admin.ModelAdmin):
